@@ -35,7 +35,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-st.title("🍞 Yeast Calculator (2D Interpolation)")
+st.title("🍕 Yeast Calculator (2D Interpolation)")
 
 st.markdown("""
 This calculator:
