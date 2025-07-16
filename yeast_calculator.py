@@ -1,11 +1,14 @@
 import streamlit as st
+import numpy as np
 
 # Chart yeast % values
-yeast_percents = [0.003, 0.006, 0.010, 0.021, 0.031, 0.042,
-                  0.063, 0.094, 0.126, 0.168, 0.210, 0.252,
-                  0.294, 0.336, 0.420]
+yeast_percents = np.array([
+    0.003, 0.006, 0.010, 0.021, 0.031, 0.042,
+    0.063, 0.094, 0.126, 0.168, 0.210, 0.252,
+    0.294, 0.336, 0.420
+])
 
-# Chart data (partial sample — expand as desired!)
+# Chart data (hours at given yeast %)
 chart_data = {
     17.8: [162, 105, 78, 50, 40, 32, 28, 24, 20, 15, 12, 10, 9, 8, 6],
     18.3: [152, 98, 68, 47, 37, 31, 25, 21, 18, 14, 12, 9, 8, 8, 6],
@@ -17,23 +20,31 @@ chart_data = {
     30.0: [32, 19, 14, 10, 7, 5, 5, 4, 4, 3, 3, 2, 2, 2, 2]
 }
 
-# --- Streamlit page config ---
+# Conversion factors
+# relative to IDY = 1.0
+yeast_types = {
+    "Instant Dry Yeast (IDY)": 1.0,
+    "Active Dry Yeast (ADY)": 1.25,
+    "Fresh Yeast": 3.0
+}
+
+# --- Streamlit UI ---
 st.set_page_config(
-    page_title="Yeast Calculator",
+    page_title="Yeast Calculator (2D Interpolation)",
     layout="centered",
     initial_sidebar_state="collapsed"
 )
 
-# --- App UI ---
-st.title("🍞 Instant Dry Yeast Calculator")
+st.title("🍞 Yeast Calculator (2D Interpolation)")
 
 st.markdown("""
-Enter your dough parameters to calculate how much Instant Dry Yeast (IDY) you need for your desired fermentation time.
+This calculator:
+- interpolates both **temperature** and **time**
+- supports multiple yeast types
 
-Works great for cold fermentation planning!
+So you get precise yeast predictions for any dough!
 """)
 
-# Sliders for mobile-friendly input
 temp_input = st.slider(
     "Dough Temperature (°C)",
     min_value=17.0,
@@ -58,22 +69,70 @@ flour_weight = st.slider(
     value=1000.0
 )
 
-# Find closest temp in chart
-closest_temp = min(chart_data.keys(), key=lambda t: abs(t - temp_input))
-row_hours = chart_data[closest_temp]
+yeast_choice = st.selectbox(
+    "Select Yeast Type",
+    list(yeast_types.keys())
+)
 
-# Use mid yeast % as reference (≈0.100%)
-mid_idx = len(row_hours) // 2
-chart_hours = row_hours[mid_idx]
-chart_yeast_pct = yeast_percents[mid_idx]
+# --- Interpolation logic ---
 
-# Calculate required yeast %
-yeast_pct_needed = chart_yeast_pct * (chart_hours / target_hours)
-yeast_grams = yeast_pct_needed / 100 * flour_weight
+temps_sorted = sorted(chart_data.keys())
+
+if temp_input <= temps_sorted[0]:
+    t_low = t_high = temps_sorted[0]
+elif temp_input >= temps_sorted[-1]:
+    t_low = t_high = temps_sorted[-1]
+else:
+    for i in range(len(temps_sorted)-1):
+        if temps_sorted[i] <= temp_input <= temps_sorted[i+1]:
+            t_low = temps_sorted[i]
+            t_high = temps_sorted[i+1]
+            break
+
+if t_low == t_high:
+    interp_hours = np.array(chart_data[t_low])
+else:
+    y_low = np.array(chart_data[t_low])
+    y_high = np.array(chart_data[t_high])
+    factor = (temp_input - t_low) / (t_high - t_low)
+    interp_hours = y_low + (y_high - y_low) * factor
+
+# interpolate across time
+idx = np.searchsorted(interp_hours[::-1], target_hours, side='left')
+idx = len(interp_hours) - idx
+
+if idx <= 0:
+    yeast_needed_idy = yeast_percents[0]
+elif idx >= len(interp_hours):
+    yeast_needed_idy = yeast_percents[-1]
+else:
+    h_low = interp_hours[idx-1]
+    h_high = interp_hours[idx]
+    y_low = yeast_percents[idx-1]
+    y_high = yeast_percents[idx]
+    
+    if h_high == h_low:
+        yeast_needed_idy = y_low
+    else:
+        yeast_needed_idy = y_low + (y_high - y_low) * (h_low - target_hours) / (h_low - h_high)
+
+# adjust for chosen yeast type
+factor = yeast_types[yeast_choice]
+yeast_needed = yeast_needed_idy * factor
+
+yeast_grams = yeast_needed / 100 * flour_weight
 
 # --- Display results ---
-st.success(f"**Closest chart temperature:** {closest_temp} °C")
-st.info(f"**Estimated IDY needed:** {yeast_pct_needed*100:.2f} % baker's percentage")
-st.write(f"👉 For {int(flour_weight)} g flour → **{yeast_grams:.2f} g IDY**")
+st.success(f"**Interpolated fermentation times at {temp_input:.1f}°C:**\n" +
+           ", ".join(f"{h:.1f}" for h in interp_hours))
 
-st.caption("Note: Based on partial fermentation chart. Always test and adjust for your flour, hydration, and conditions!")
+st.info(f"**Estimated {yeast_choice} needed:** {yeast_needed*100:.3f}% baker's percentage")
+
+st.write(f"👉 For {int(flour_weight)} g flour → **{yeast_grams:.2f} g {yeast_choice}**")
+
+st.caption("""
+Remember:
+- ADY is ~25% weaker than IDY
+- Fresh yeast is ~3× the weight of IDY
+Always test and adjust for your flour and kitchen environment.
+""")
